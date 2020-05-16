@@ -1,0 +1,450 @@
+---
+title: "Damerla_Surya_midterm"
+author: "Suma"
+date: "3/27/2020"
+output: 
+   html_document:
+     highlight: monochrome
+     toc: true
+     toc_float: true
+     toc_collapsed: true
+     number_sections: true
+     
+---
+
+```{r global_options, include=FALSE}
+# Setting global options : figure width is 8, all figures are saved in Figs folder and echo , warning and message are set to false
+knitr::opts_chunk$set(fig.width=8,
+                      echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r load_packages}
+#Loading all required packages
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+require(maps) # to create map
+library(highcharter) #to create interactive map
+library(janitor) #to clean
+```
+
+``` {r load_data}
+#read_csv reads the data as dataframe
+raw_confirmed <- read_csv("data/time_series_19-covid-Confirmed.csv")
+raw_deaths <- read_csv("data/time_series_19-covid-Deaths.csv")
+raw_recovered <- read_csv("data/time_series_19-covid-Recovered.csv")
+```
+
+
+```{r tidy_data}
+## creating a function for tidying data
+tidyData <- function(data) {
+  ## renaming columns for ease and cleaner code
+   data <- data %>%
+    rename(state = `Province/State`) %>%  
+    rename(country = `Country/Region`)
+   
+  ## pivot_longer function from tidyr makes wide data to long format
+  data <- data %>% 
+      pivot_longer(
+        cols = ends_with("/20"),
+        names_to = "date",
+        values_to = "count")
+  
+  ## convert from character to date
+  data$date <- as.Date(data$date,format = "%m/%d/%y")
+  
+  # Now, there are lot of duplicate rows which have same country and date, so we can combine them
+  data <- data %>%
+    group_by(Lat,Long,state, country, date) %>% 
+    summarise(count = sum(count)) %>% 
+    as.data.frame()
+  
+  return(data)
+}
+
+## clean the three datasets
+confirmed <- tidyData(raw_confirmed) %>% rename(confirmed = count)
+deaths <-  tidyData(raw_deaths) %>% rename(deaths = count)
+recovered <-  tidyData(raw_recovered) %>% rename(recovered = count)
+
+## merging the three datasets into one dataset for easier analysis based on state,country and date
+corona <- confirmed %>% 
+  merge(deaths, all = TRUE) %>% 
+  merge(recovered, all = TRUE)
+  
+```
+
+
+# Introduction  
+This is an analysis report of the Coronavirus (COVID-19).The 2019-nCoV is a contagious coronavirus that hailed from Wuhan, China. This new strain of virus has striked fear in many countries as cities are quarantined and hospitals are overcrowded. This dataset from John Hopkin's university will help us understand how 2019-nCoV is spread around the world.
+ 
+## Variables  
+There are three time series datasets which recorded the numbers of confirmed cases,deaths and the recoveries of COVID-19 corresponding to country/state/region from 1/22 to 3/21.
+
+* Variables in the original datasets include :  
+  + Province/State : contains the state value  
+  + Country/Region : contains the country value
+  + Lat : contains the latitude value of the region  
+  + Long : contains the longitude co-ordinate value of the region
+  + Rest of the columns are dated from 1/22 - 3/21 : contains the value of reported cases
+  
+The datasets are cleaned using the tidyverse libraries and they are merged into a single dataset.
+
+* Variables after tidying and merging the datasets:  
+  + state : renamed column of Province/State 
+  + country : renamed column of Country/Region
+  + Lat : same as the original dataset
+  + Long : same as the original dataset
+  + Date : It is a newly created variable containing all the column headers of each Date 
+  + Confirmed : contains the sum of all the confirmed cases for a given date and region
+  + Deaths  : contains the sum of all the number of deaths for a given date and region
+  + Recovered  : contains the sum of all the number of recovered patients for a given date and region
+
+```{r util_functions}
+##This chunk contains the util functions created specific for this analysis
+#Function 1
+#creating a function to create type and count columns 
+#Using pivot_longer to make wide dataset long. confirmed, deaths and recovered become a new column named type
+pivotData <- function(data){
+  data %>%
+    pivot_longer(
+        cols = c(confirmed,deaths,recovered),
+        names_to = "type",
+        values_to = "count")
+}
+
+#Function 2
+#creating a function to mutateData to create active, recovery% and mortality% columns
+# mutate from dplyr package creates new variables
+mutateData <- function(data){
+   data <- data %>%
+      mutate(active = confirmed - recovered - deaths) %>%
+      mutate("recovery %" = round((recovered/confirmed)*100, digits = 3)) %>%
+      mutate("mortality %" = round((deaths/confirmed)*100, digits = 3))
+}
+
+#Function 3
+#To print kable table with three paramters : data, caption of the table and number of columns to apply width
+printTable <- function(data, caption, col = 7){  
+  col <- col
+  data %>%
+    kable(format = "html", booktabs = T,caption = caption) %>%  #creates kable with html format
+    column_spec(column = 1:col, width = "1in") %>%
+    kable_styling() #kableExtra library has kable_styling to beautify the table
+}
+  
+```
+
+# Worldwide Analysis  
+## Trend of cases worldwide  
+```{r plot1:worldwide trend}
+
+#Creating world dataset to compute cases worldwide
+world <-  corona %>%
+    group_by(date) %>%     #grouping the rows by date
+    #computing total confirmed, deaths and recovered cases count for the world
+    summarise(confirmed = sum(confirmed),  
+              deaths = sum(deaths),
+              recovered = sum(recovered))
+   
+#Plot of cases worldwide
+world %>%
+  pivotData()%>% #function call to make the dataset long and create Type column
+  ggplot(mapping = aes(x = date, y = count/1000, color = type)) +
+  geom_point()+
+  geom_line() +
+  labs(title = "Trend of cases worldwide",
+         y = "Cases (1000s)")
+
+```
+
++ Observations:   
+  * The number of confirmed cases are gradually increasing day by day.
+  * On January 22nd, there were 555 confirmed cases, 17 deaths and 28 recoveries worldwide. It is unfortunate and shocking that these numbers grew to 304524 confirmed cases, 12973 deaths and 91499 recoveries as of March 21st within a span of two months.
+ 
+
+## Cases worldwide by date  
+Three new variables have been introduced: active (confirmed – recover – deaths), recovery %
+(recover/confirmed), and mortality % (deaths/confirmed) to get more insights into the effect of corona
+
+```{r table1:worldwide cases by date, results= "asis"}
+
+#call the mutateData function on world dataset
+world_bydate <- world %>%
+  mutateData()
+  
+## first 11 records
+world_bydate %>% head(11) %>%
+ printTable("Table 1: Cases worldwide by date") #calling util function to print kable
+
+```
++ Observations: 
+    * The current mortality rates range from 2% to 4.2% with an average rate of `r round(mean(world_bydate[["mortality %"]]),2)` %
+    * The current recovery rates range from 1.74% to 55.28% with an average rate of `r round(mean(world_bydate[["recovery %"]]),2)` %
+    * It took 18 days to approximately double the number of confirmed cases from 101784 to  197142 but it took 4 days to reach 304524 cases as of March 21st.
+ 
+
+## Cases by country table
+Three new variables have been introduced: active (confirmed – recover – deaths), recovery %
+(recover/confirmed), and mortality % (deaths/confirmed) to get more insights into the effect of corona country wise
+
+```{r table2:cases by country, results = "asis"}
+#Creating world dataset to compute cases worldwide
+world_bycountry <- corona %>%
+    filter(date == "2020-03-21") %>%     #filter by latest date
+    group_by(country) %>%      #grouping the rows by country
+    #computing total confirmed, deaths and recovered cases count
+    summarise(confirmed = sum(confirmed),
+              deaths = sum(deaths),
+              recovered = sum(recovered)) %>%
+    arrange(-confirmed) %>% #desc order of confirmed column
+    mutateData()   # creating new variables(active, recover%, mortality%) by calling mutateData function previously created
+
+## first 12 records
+world_bycountry %>% 
+  head(12) %>%
+  printTable("Table 2: Cases worldwide by country") #calling the util function to print kable
+```
++ Observations: 
+  * China has the most confirmed cases followed by Italy, US and Spain. However, it is interesting to note that China has 88% recovery rate, whereas Italy, US and Spain have about 11%, 0 and 8% recovery rates respectively.
+  * Italy has the maximum number of deaths with 9% mortality rate and 11% recovery rate.
+
+  
+## Trend of Cases Excluding China
+A useful analysis is to show the worldwide cases excluding
+China since it has the most number of confirmed cases
+```{r plot2:trend of cases except china}
+#Creating world dataset to compute cases worldwide
+world_notchina <- corona %>%
+    filter(country!="China") %>%
+    #grouping the rows by date
+    group_by(date) %>%
+    #computing total confirmed, deaths and recovered cases count
+    summarise(confirmed = sum(confirmed),
+              deaths = sum(deaths),
+              recovered = sum(recovered))
+ 
+#Plot of cases worldwide except china
+world_notchina %>%
+  pivotData() %>% #calling util func to create type and count columns
+  ggplot(mapping = aes(x = date, y = count/1000, color = type)) +
+  geom_point()+
+  geom_line() +
+  labs(title = "Trend of cases worldwide except China",
+         y = "Cases (1000s)")
+
+```
+
++ Observations:     
+  * The identified cases is exponentially growing from March 1 and we can see a peak in the recovered cases as well.
+  * There are a total of 3259 deaths in China till March 21st.
+  
+## Cases worldwide by date, excluding China
+
+```{r table3:worldwide cases excluding china, results= "asis"}
+ 
+# creating new variables(Active, recover%, mortality%) by calling mutateData util function previously created
+world_notchina <- world_notchina %>%
+  mutateData()
+
+## first 10 records
+world_notchina %>% head(11) %>%
+  printTable("Table 3: Cases worldwide by date except China") #calling util function to print kable
+
+```
+
++ Observations:    
+  * There's a drastic difference in the number of confirmed cases worldwide without China in the initial stages, however today there are 223219 confirmed cases worldwide except China.  
+  * The recovery rate ranges between 0 to 16.490% with average of `r round(mean(world_notchina[["recovery %"]]),2)` % without China whereas otherwise the range is 1% to 55% with average of `r round(mean(world_bydate[["recovery %"]]),2)` % rates.
+
+# U.S. Analysis. Analyze the cases in the U.S.
+## Trend in the U.S
+```{r plot3: cases in US}
+
+us <- corona %>%
+    #filter country to US
+    filter(country == "US") %>%
+    #grouping the rows by date
+    group_by(date) %>%
+    #computing total confirmed, deaths and recovered cases count
+    summarise(confirmed = sum(confirmed),
+              deaths = sum(deaths),
+              recovered = sum(recovered))
+
+us %>%
+  pivotData() %>% #function call to create type and count columns
+  #Plot of cases worldwide
+  ggplot(mapping = aes(x = date, y = count/1000, color = type)) +
+  geom_point()+
+  geom_line() +
+  labs(title = "Trend of cases in US",
+         y = "Cases (1000s)")
+
+```
++ Observations:    
+  * US has seen a peak in the number of confirmed cases recently with 25182 active cases as of March 21st out of 2907836 cases worldwide.  
+  * The mortality rate of US is at 1.204%.
+  
+  
+## Table of cases in the U.S. by date
+```{r table4:cases in US, results= "asis"}
+ 
+# creating new variables(Active, recover%, mortality%) by calling mutateData function previously created
+us_bydate <- us %>%
+  mutateData()
+  
+## first 10 records
+us_bydate %>% head(11) %>%
+ printTable("Table 4: Cases in the U.S. by date")
+
+```
++ Observations:  
+  *  US has a total of 25182 active cases and `r sum(us_bydate[["recovered"]])`  recovered cases as of March 21st.
+  * It took 58 days to reach 13677 confirmed cases in the US but only 2 days to reach 25489 cases.
+  
+##  Table of cases in the U.S. by state
+```{r table5:cases in US by state table, results = "asis"}
+
+#Creating U.S dataset to compute cases statewise
+us_bystate <- corona %>%
+    filter(country == "US") %>%          #filter country to US and latest date
+    filter(date == "2020-03-21") %>%     
+    group_by(state) %>%                  #grouping the rows by state
+    #computing total confirmed, deaths and recovered cases count
+    summarise(confirmed = sum(confirmed),
+              deaths = sum(deaths),
+              recovered = sum(recovered)) %>%
+    arrange(-confirmed) %>%
+    mutateData() #calling mutate function
+
+## first 10 records
+us_bystate %>% 
+  head(12) %>%
+  printTable("Table 5: Cases in the U.S by state")
+
+```
++ Observations:   
+  * New York  with 11710 cases is the most infected state in the US followed by Washington, California and New Jersey at 1793,1364 and 1327 cases respectively.   
+  * Washington with 1793 has shocking 94 number of deaths whereas New York seems to have it contained with only 60 deaths in 11710 confirmed cases.
+  
+# Analysis
+## Confirmed vs Deaths in top 10 countries  
+The below graph compares the number of confirmed cases vs the number of deaths in the top 10 countries exposed to COVID-19.The labelled countries have seen more than 500 deaths as of March 21st.
+
+```{r plot: confirm vs deaths}
+world_bycountry %>%
+  head(10) %>%
+  ggplot(mapping = aes(x = confirmed, y = deaths, label = country)) +
+  geom_point(aes(color = country, size = country)) +
+  geom_text(aes(label=ifelse(deaths>500,as.character(country),'')),hjust=0,vjust=0) +
+  geom_smooth() +
+  labs(title = "Cases of COVID-19 in top 10 countries",
+       subtitle = "Confirmed vs Deaths",
+       caption = "Source:Corona dataset retrieved till March 21")
+
+```
++ Observations:    
+  * The maximum number of deaths in a country are 4825 from Italy.
+  * Even though US and Spain have seen similar number of confirmed cases, Spain has relatively more number of deaths
+
+
+## Worldwide map of confirmed cases  
+
+Below map shows the confirmed cases across the world.
+```{r plot:confirmed cases across the world}
+#creating a corona map  
+corona_map <- world_bycountry %>%
+  select(country, confirmed, deaths,recovered) %>%
+  rename(region = country)   # Rename columns
+
+#merge map and corona data  
+world_map <- map_data("world") #creating a map of the world dataset
+corona_map <- left_join(corona_map, world_map, by = "region") #Left joining the dataset based on region i.e. country
+
+
+# ggplot plot of confirmed cases across the world
+corona_map %>%
+  ggplot(aes(long, lat, group = group)) +
+  geom_polygon(aes(fill = confirmed), color = "white") +
+  labs(title = "Confirmed cases across the world",
+       caption = "Source: corona dataset retrieved till March 21")
+
+```
+
+## Interactive map of active cases
+
+An interactive map of active cases as of March 21st is shown below. Hover on each country to see the number of active cases.The color gradient indicates the number of active cases with darker color indicating higher cases.
+```{r interactive: active cases}
+
+data(worldgeojson, package = "highcharter")
+
+world_bycountry$country[world_bycountry$country  == "US"] <- "United States of America"
+
+world_bycountry %>% 
+  janitor::clean_names() %>% 
+  filter(confirmed > 0) -> countries
+
+highchart() %>%
+  hc_add_series_map(worldgeojson, countries, value = 'active', joinBy = c('name','country'))  %>% 
+  hc_colorAxis(minColor = "#FA6039", maxColor = "#000000") %>% 
+  hc_title(text = "Countries exposed to nCov-19") %>% 
+  hc_subtitle(text = 'Total Active Cases') 
+
+```
+
+
+## Journey of corona virus  
+```{r table:confirmed cases across the world}
+world_spread <- corona %>%
+    filter(confirmed!=0) %>%
+    #grouping the rows by date
+    group_by(date,country) %>%
+    #computing total confirmed, deaths and recovered cases count for the world
+    summarise(confirmed = sum(confirmed),
+              deaths = sum(deaths),
+              recovered = sum(recovered)) %>%
+    arrange(date) 
+
+## first 12 records
+world_spread %>% 
+  head(12) %>%
+    printTable(caption = "Table 6.1: First 12 countries exposed to ncov-19",col = 5)
+
+```
+
++ Observations:  
+ * Corona outbreak started from China travelling across Japan, SouthKorea, Taiwan, Thailand and then reached USA on January 22nd.It continued and spread across 166 countries worldwide infecting 
+ * Even though corona first spread to Japan, a denser area compared to USA, they have only 1007 confirmed cases as of March 21st whereas USA has 25489 cases.
+
+
+
+# Conclusion  
+## What did you learn about COVID-19?  
+ + COVID-19 is rapidly growing and spreading across all the countries. As of 21 March 2020, there are 166 countries exposed to COVID-19. 
+ + Corona outbreak started in China and then infected the rest of the world.
+ + Japan is the second infected country but it has only 1007 confirmed cases as of March 21st.
+ + Italy with 53578 confirmed cases has the highest number of deaths(4825) whereas China with maximum number of confirmed cases(81305) is showing high recovery with 88% chance.
+ + The current recovery rates are between 1.74% to 55.28% 
+ + The current mortality rates are between 2% to 4.2%. However, it is expected to increase because of peak of deaths in countries like Spain and Italy.
+ 
+
+## Do your findings match what you hear in the media?  
+Yes,I find that most of the findings match the media news.
+
+## If you were to explain and advise university officials on the spread of this virus, how would you describe it? 
+ + Coronavirus disease (COVID-19) is an infectious disease spreading person to person caused by a novel virus. The disease causes respiratory illness (like the flu) with symptoms such as a cough, fever, and in more severe cases, difficulty breathing. The disease can only be confirmed after 14 days of exposure to the virus[6].  
+ + COVID-19 is spreading exponentially day by day with 2.9M cases worldwide as of March 21st.It has spread across 166 countries worldwide in a short span of two months.  
+ + The United States nationally is in the acceleration phase of the pandemic.As of March 21st,US is the top 3rd country for the most number of recorded cases. Indiana state has 128 confirmed cases and 4 deaths. It is only possible to stop spreading it by taking proper measures and by containing it.  
+ + In active places like university, the chances of the outbreak is high, so it is better to practice social distancing and to be self-quarantined for atleast 14 days and to take proper measures to avoid the virus spread.  
+
+
+# References
+[1] [CSSEGISandData/COVID-19. (n.d.). GitHub. Retrieved March 22, 2020](https://github.com/CSSEGISandData/COVID-19)  
+[2] [Gather :TidyVerse](https://tidyr.tidyverse.org/reference/gather.html )   
+[3] [Pivot data](https://www.storybench.org/pivoting-data-from-columns-to-rows-and-back-in-the-tidyverse)    
+[4] [Knitr](https://www.rdocumentation.org/packages/knitr/versions/1.28/topics/kable)  
+[5] [HighCharter](https://www.datacamp.com/community/tutorials/data-visualization-highcharter-r)  
+[6] [Corona: World Health Organisation](https://www.who.int/emergencies/diseases/novel-coronavirus-2019)  
+[7] [Corona updates](https://www.cdc.gov/coronavirus/2019-ncov/cases-updates/summary.html)
+
